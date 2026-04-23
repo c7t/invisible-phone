@@ -165,6 +165,19 @@
       await new Promise(r => { video.onloadeddata = r; });
     }
 
+    // ── Gyro correction for phone rotation ───────────────────
+    // iris position is in camera space, so phone rotation shifts iris
+    // just like eye movement — we correct by adding back the phone angle.
+    // front cam HFOV estimate for Pixel; gain slider absorbs any scaling error.
+    const FRONT_HFOV_DEG = 80;
+    let gammaZero = null, deltaGamma = 0;
+
+    window.addEventListener('deviceorientation', e => {
+      if (e.gamma === null) return;
+      if (gammaZero === null) gammaZero = e.gamma;
+      deltaGamma = e.gamma - gammaZero;
+    });
+
     // ── Face tracker ──────────────────────────────────────────
     let landmarker = null;
 
@@ -201,7 +214,9 @@
             const lm = res.faceLandmarks[0];
             const ix = (lm[468].x + lm[473].x) / 2 - 0.5;
             const iy = (lm[468].y + lm[473].y) / 2 - 0.5;
-            eyeX = eyeX * 0.7 + ix * 0.3;
+            // subtract phone-rotation component so only true eye movement remains
+            const cx = ix + deltaGamma / FRONT_HFOV_DEG;
+            eyeX = eyeX * 0.7 + cx * 0.3;
             eyeY = eyeY * 0.7 + iy * 0.3;
           } else {
             eyeX *= 0.9; eyeY *= 0.9;
