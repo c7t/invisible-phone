@@ -29,7 +29,7 @@
 
     #controls {
       position: fixed; bottom: 0; left: 0; right: 0;
-      padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+      padding: 10px 0 calc(env(safe-area-inset-bottom, 0px) + 10px);
       background: rgba(0,0,0,0.5);
       backdrop-filter: blur(8px);
     }
@@ -39,10 +39,15 @@
       color: #999;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      margin-bottom: 8px;
+      margin-bottom: 4px;
+      padding: 0 12px;
     }
-    #gainVal { color: #ddd; font-variant-numeric: tabular-nums; }
-    #gain { display: block; width: 100%; accent-color: #fff; cursor: pointer; }
+    .gainVal { color: #ddd; font-variant-numeric: tabular-nums; }
+    #gainX, #gainY {
+      display: block; width: 100%;
+      margin: 0 0 8px; padding: 0;
+      accent-color: #fff; cursor: pointer;
+    }
 
     #hint {
       position: fixed; inset: 0;
@@ -71,10 +76,10 @@
   <div id="status">Starting cameras…</div>
 
   <div id="controls">
-    <label for="gainX">Horizontal <span id="gainXVal">0.50</span></label>
-    <input type="range" id="gainX" min="-5" max="5" step="0.05" value="0.5">
-    <label for="gainY" style="margin-top:8px">Vertical <span id="gainYVal">0.50</span></label>
-    <input type="range" id="gainY" min="-5" max="5" step="0.05" value="0.5">
+    <label for="gainX">Horizontal <span id="gainXVal" class="gainVal">-1.0</span></label>
+    <input type="range" id="gainX" min="-10" max="0" step="0.1" value="-1">
+    <label for="gainY">Vertical <span id="gainYVal" class="gainVal">-1.0</span></label>
+    <input type="range" id="gainY" min="-10" max="0" step="0.1" value="-1">
   </div>
 
   <div id="hint"><div>
@@ -93,8 +98,8 @@
     const vRear     = document.getElementById('vRear');
     const vFront    = document.getElementById('vFront');
     const statusEl  = document.getElementById('status');
-    const gainXEl   = document.getElementById('gainX');
-    const gainYEl   = document.getElementById('gainY');
+    const gainXEl    = document.getElementById('gainX');
+    const gainYEl    = document.getElementById('gainY');
     const gainXValEl = document.getElementById('gainXVal');
     const gainYValEl = document.getElementById('gainYVal');
     const hintEl    = document.getElementById('hint');
@@ -111,7 +116,7 @@
 
     // ── Transform state ───────────────────────────────────────
     let panX = 0, panY = 0, zoom = 1;
-    let gainX = 0.5, gainY = 0.5;
+    let gainX = -1, gainY = -1;
     let eyeX = 0, eyeY = 0;
     let tzSmooth = null, tzRef = null; // for depth-driven zoom
 
