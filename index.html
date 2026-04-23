@@ -157,6 +157,9 @@ self.addEventListener('message', async e => {
     });
 
     trackerWorker.postMessage({ type: 'init' });
+    trackerWorker.addEventListener('error', e => {
+      statusEl.textContent = 'Worker error: ' + (e.message || 'unknown — check console');
+    });
 
     // ── Gain slider ───────────────────────────────────────────
     gainEl.addEventListener('input', () => {
@@ -256,6 +259,9 @@ self.addEventListener('message', async e => {
     }, 500);
 
     // ── Boot ──────────────────────────────────────────────────
+    // Rear cam, front cam, and worker all initialise independently.
+    // trackFrame checks workerReady before sending frames, so the
+    // RVCB loop can start as soon as the front cam is ready.
     try {
       await openCamera(vRear, {
         facingMode: { exact: 'environment' },
@@ -264,27 +270,19 @@ self.addEventListener('message', async e => {
       rearReady = true;
       statusEl.textContent = 'Loading face tracker…';
       requestAnimationFrame(loop);
-
-      const [, frontResult] = await Promise.allSettled([
-        new Promise(r => trackerWorker.addEventListener('message',
-          function h(e) { if (e.data.type === 'ready') { trackerWorker.removeEventListener('message', h); r(); } }
-        )),
-        openCamera(vFront, {
-          facingMode: { exact: 'user' },
-          width: { ideal: 640 }, height: { ideal: 480 },
-        }),
-      ]);
-
-      if (frontResult.status === 'fulfilled') {
-        frontReady = true;
-        vFront.requestVideoFrameCallback(trackFrame);
-      } else {
-        statusEl.textContent = 'Front cam: ' + frontResult.reason.message;
-      }
-
     } catch (e) {
-      statusEl.textContent = 'Error: ' + e.message;
+      statusEl.textContent = 'Rear cam error: ' + e.message;
     }
+
+    openCamera(vFront, {
+      facingMode: { exact: 'user' },
+      width: { ideal: 640 }, height: { ideal: 480 },
+    }).then(() => {
+      frontReady = true;
+      vFront.requestVideoFrameCallback(trackFrame);
+    }).catch(e => {
+      statusEl.textContent = 'Front cam: ' + e.message;
+    });
   </script>
 </body>
 </html>
