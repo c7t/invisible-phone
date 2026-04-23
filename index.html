@@ -175,52 +175,10 @@
       await new Promise(r => { video.onloadeddata = r; });
     }
 
-    // ── Gyroscope integration ─────────────────────────────────
-    // DeviceOrientationEvent uses ZXY Euler angles which hit gimbal lock
-    // at beta=90° (phone held portrait). Instead we integrate the raw
-    // body-frame gyroscope from DeviceMotionEvent — no gimbal lock, all
-    // three axes treated equally.
-    let qDelta = { w: 1, x: 0, y: 0, z: 0 };
-    let lastMotionTs = null;
-
-    const qInv = q => ({ w: q.w, x: -q.x, y: -q.y, z: -q.z });
-    function qMul(a, b) {
-      return {
-        w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
-        x: a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
-        y: a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
-        z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
-      };
-    }
-    function qRot(q, v) {
-      const r = qMul(qMul(q, { w: 0, ...v }), qInv(q));
-      return { x: r.x, y: r.y, z: r.z };
-    }
-    function qNorm(q) {
-      const n = Math.sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z);
-      return { w: q.w/n, x: q.x/n, y: q.y/n, z: q.z/n };
-    }
-
-    window.addEventListener('devicemotion', e => {
-      const rr = e.rotationRate;
-      if (!rr || rr.alpha === null) return;
-      const now = performance.now();
-      if (lastMotionTs === null) { lastMotionTs = now; return; }
-      const dt = Math.min((now - lastMotionTs) / 1000, 0.05);
-      lastMotionTs = now;
-
-      // body-frame angular velocity (device X/Y/Z axes), rad/s
-      const wx = rr.beta  * Math.PI / 180;
-      const wy = rr.gamma * Math.PI / 180;
-      const wz = rr.alpha * Math.PI / 180;
-
-      const angle = Math.sqrt(wx*wx + wy*wy + wz*wz) * dt;
-      if (angle < 1e-8) return;
-
-      const s = Math.sin(angle / 2) / angle * dt;
-      const dq = { w: Math.cos(angle / 2), x: wx*s, y: wy*s, z: wz*s };
-      qDelta = qNorm(qMul(qDelta, dq)); // right-multiply for body-frame integration
-    });
+    // No gyro needed. For a scene at infinity the parallax angle is exactly
+    // tx/tz from the front camera — phone rotation shifts the face in the
+    // front frame by the same angle as the rotation, which is the correct
+    // parallax signal. The gain sliders calibrate sign and magnitude.
 
     // ── Face tracker ──────────────────────────────────────────
     let landmarker = null;
@@ -257,13 +215,12 @@
           const mat = res.facialTransformationMatrixes?.[0]?.data;
           if (mat) {
             // column-major 4×4: translation at [12],[13],[14]
-            const cam = { x: mat[12], y: mat[13], z: mat[14] };
-            // rotate face back to startup reference frame, cancelling all
-            // phone rotation (yaw, pitch, and roll)
-            const f = qRot(qDelta, cam);
-            const d = Math.abs(f.z) || 1; // abs handles either z-sign convention
-            eyeX = eyeX * 0.7 + (f.x / d) * 0.3;
-            eyeY = eyeY * 0.7 + (f.y / d) * 0.3;
+            // tx/tz and ty/tz are the camera-space angles — correct parallax
+            // signal for scene at infinity, phone rotation included for free.
+            const tx = mat[12], ty = mat[13], tz = mat[14];
+            const d = Math.abs(tz) || 1;
+            eyeX = eyeX * 0.7 + (tx / d) * 0.3;
+            eyeY = eyeY * 0.7 + (ty / d) * 0.3;
           } else {
             eyeX *= 0.9; eyeY *= 0.9;
           }
