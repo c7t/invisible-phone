@@ -3,129 +3,258 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Invisible Phone — Stream Test</title>
+  <title>Invisible Phone</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #000; color: #fff; font-family: monospace; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+
+    canvas {
+      position: fixed; inset: 0;
+      width: 100%; height: 100%;
+      touch-action: none;
+    }
+
+    /* keep videos off-screen but decodable */
+    video { position: fixed; left: -200%; width: 1px; height: 1px; }
+
     #status {
-      padding: 12px;
-      font-size: 14px;
-      line-height: 1.6;
-      min-height: 80px;
-    }
-    .line { margin-bottom: 4px; }
-    .ok  { color: #4f4; }
-    .err { color: #f44; }
-    .wait { color: #ff4; }
-    #videos {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      padding: 8px;
-    }
-    .cam-wrap {
-      position: relative;
-    }
-    .cam-label {
-      position: absolute;
-      top: 6px; left: 8px;
+      position: fixed; top: 0; left: 0; right: 0;
+      padding: 10px 14px;
+      font: 12px/1.5 monospace;
+      color: #ddd;
       background: rgba(0,0,0,0.6);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-      z-index: 1;
+      pointer-events: none;
+      transition: opacity 0.8s;
     }
-    video {
-      width: 100%;
-      border-radius: 6px;
-      display: block;
-      background: #111;
+    #status.hidden { opacity: 0; }
+
+    #controls {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
     }
-    #btn {
-      display: block;
-      margin: 16px auto;
-      padding: 12px 32px;
-      font-size: 16px;
-      font-family: monospace;
-      background: #222;
-      color: #fff;
-      border: 1px solid #555;
-      border-radius: 8px;
-      cursor: pointer;
+    #controls label {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font: 11px monospace;
+      color: #999;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
     }
-    #btn:active { background: #444; }
+    #gainVal { color: #ddd; font-variant-numeric: tabular-nums; }
+    #gain { display: block; width: 100%; accent-color: #fff; cursor: pointer; }
+
+    #hint {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+      transition: opacity 0.6s;
+    }
+    #hint.gone { opacity: 0; }
+    #hint div {
+      background: rgba(0,0,0,0.78);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 14px;
+      padding: 20px 24px;
+      max-width: 290px;
+      font: 13px/1.75 monospace;
+      color: #bbb;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
-  <div id="status">
-    <div class="line wait">Tap the button to start the stream test.</div>
-  </div>
-  <button id="btn" onclick="runTest()">Start stream test</button>
-  <div id="videos">
-    <div class="cam-wrap" id="wrap-rear" style="display:none">
-      <span class="cam-label">Rear camera</span>
-      <video id="vid-rear" autoplay playsinline muted></video>
-    </div>
-    <div class="cam-wrap" id="wrap-front" style="display:none">
-      <span class="cam-label">Front camera</span>
-      <video id="vid-front" autoplay playsinline muted></video>
-    </div>
+  <canvas id="c"></canvas>
+  <video id="vRear" autoplay playsinline muted></video>
+  <video id="vFront" autoplay playsinline muted></video>
+
+  <div id="status">Starting cameras…</div>
+
+  <div id="controls">
+    <label for="gain">
+      Parallax gain
+      <span id="gainVal">0.50</span>
+    </label>
+    <input type="range" id="gain" min="-2" max="2" step="0.02" value="0.5">
   </div>
 
-  <script>
-    function log(msg, cls) {
-      const d = document.getElementById('status');
-      const line = document.createElement('div');
-      line.className = 'line ' + (cls || '');
-      line.textContent = msg;
-      d.appendChild(line);
+  <div id="hint"><div>
+    Drag to pan &nbsp;·&nbsp; Pinch to zoom<br>
+    Slide to tune parallax<br><br>
+    Aim at a straight edge crossing the frame. Slide until the line looks continuous.<br><br>
+    Double-tap to reset.
+  </div></div>
+
+  <script type="module">
+    import { FaceLandmarker, FilesetResolver }
+      from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+    const canvas   = document.getElementById('c');
+    const ctx      = canvas.getContext('2d', { alpha: false });
+    const vRear    = document.getElementById('vRear');
+    const vFront   = document.getElementById('vFront');
+    const statusEl = document.getElementById('status');
+    const gainEl   = document.getElementById('gain');
+    const gainValEl = document.getElementById('gainVal');
+    const hintEl   = document.getElementById('hint');
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    // ── Canvas sizing ─────────────────────────────────────────
+    function resize() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // ── Transform state ───────────────────────────────────────
+    let panX = 0, panY = 0, zoom = 1, gain = 0.5;
+    let eyeX = 0, eyeY = 0;
+
+    gainEl.addEventListener('input', () => {
+      gain = parseFloat(gainEl.value);
+      gainValEl.textContent = gain.toFixed(2);
+    });
+
+    // ── Pointer gestures (pan + pinch-zoom + double-tap reset) ─
+    const pts = new Map(); // pointerId → [x, y]
+    let pinchD = null, lastTap = 0;
+
+    canvas.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      if (pts.size === 1) {
+        const now = Date.now();
+        if (now - lastTap < 300) { panX = panY = 0; zoom = 1; }
+        lastTap = now;
+      }
+      if (pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        pinchD = Math.hypot(b[0]-a[0], b[1]-a[1]);
+      }
+    });
+
+    canvas.addEventListener('pointermove', e => {
+      if (!pts.has(e.pointerId)) return;
+      e.preventDefault();
+      const prev = pts.get(e.pointerId);
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+
+      if (pts.size === 1) {
+        panX += e.clientX - prev[0];
+        panY += e.clientY - prev[1];
+      } else if (pts.size >= 2) {
+        const [a, b] = [...pts.values()];
+        const d = Math.hypot(b[0]-a[0], b[1]-a[1]);
+        if (pinchD) zoom = Math.max(0.2, Math.min(6, zoom * d / pinchD));
+        pinchD = d;
+      }
+    });
+
+    const endPointer = e => { pts.delete(e.pointerId); if (pts.size < 2) pinchD = null; };
+    canvas.addEventListener('pointerup',     endPointer);
+    canvas.addEventListener('pointercancel', endPointer);
+
+    // ── Cameras ───────────────────────────────────────────────
+    let rearReady = false, frontReady = false;
+
+    async function startCamera(video, constraints) {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+      video.srcObject = stream;
+      await new Promise(r => { video.onloadeddata = r; });
     }
 
-    async function runTest() {
-      document.getElementById('btn').style.display = 'none';
-      document.getElementById('status').innerHTML = '';
+    // ── Face tracker ──────────────────────────────────────────
+    let landmarker = null;
 
-      log('Requesting rear camera…', 'wait');
-      let rearStream;
-      try {
-        rearStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false
-        });
-        const track = rearStream.getVideoTracks()[0];
-        const s = track.getSettings();
-        log(`Rear: OK — ${s.width}x${s.height} (${track.label})`, 'ok');
-        const vidR = document.getElementById('vid-rear');
-        vidR.srcObject = rearStream;
-        document.getElementById('wrap-rear').style.display = 'block';
-      } catch (e) {
-        log('Rear: FAILED — ' + e.message, 'err');
+    async function initTracker() {
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+      landmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+        outputFaceBlendshapes: false,
+        outputFacialTransformationMatrixes: false,
+      });
+    }
+
+    // ── Main loop ─────────────────────────────────────────────
+    let trackTs = 0, trackerAnnounced = false;
+
+    function loop(ts) {
+      // Face tracking (~30 fps)
+      if (landmarker && frontReady && vFront.readyState >= 2 && ts - trackTs > 33) {
+        if (!trackerAnnounced) {
+          trackerAnnounced = true;
+          setStatus('Tracking active — move your head');
+          setTimeout(() => { statusEl.classList.add('hidden'); hintEl.classList.add('gone'); }, 2500);
+        }
+        const res = landmarker.detectForVideo(vFront, ts);
+        if (res.faceLandmarks.length > 0) {
+          const lm = res.faceLandmarks[0];
+          // iris centers: 468 = left iris, 473 = right iris (subject anatomical)
+          // front cam is unmirrored: subject's right → smaller x in frame
+          const ix = (lm[468].x + lm[473].x) / 2 - 0.5;
+          const iy = (lm[468].y + lm[473].y) / 2 - 0.5;
+          eyeX = eyeX * 0.7 + ix * 0.3;
+          eyeY = eyeY * 0.7 + iy * 0.3;
+        } else {
+          eyeX *= 0.9; eyeY *= 0.9; // decay toward center when no face
+        }
+        trackTs = ts;
       }
 
-      log('Requesting front camera…', 'wait');
-      let frontStream;
-      try {
-        frontStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: 'user' }, width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false
-        });
-        const track = frontStream.getVideoTracks()[0];
-        const s = track.getSettings();
-        log(`Front: OK — ${s.width}x${s.height} (${track.label})`, 'ok');
-        const vidF = document.getElementById('vid-front');
-        vidF.srcObject = frontStream;
-        document.getElementById('wrap-front').style.display = 'block';
-      } catch (e) {
-        log('Front: FAILED — ' + e.message, 'err');
-      }
-
-      if (rearStream && frontStream) {
-        log('Both streams active simultaneously — ready to build!', 'ok');
-      } else if (!rearStream && !frontStream) {
-        log('Both streams failed. Check permissions.', 'err');
+      // Render rear camera
+      const W = canvas.width, H = canvas.height;
+      if (rearReady && vRear.readyState >= 2 && vRear.videoWidth) {
+        const vw = vRear.videoWidth, vh = vRear.videoHeight;
+        const s  = Math.max(W / vw, H / vh) * zoom;
+        // subject right → eyeX < 0 → shiftX < 0 → image shifts left → right side visible ✓
+        const shiftX = eyeX * gain * W;
+        const shiftY = eyeY * gain * H;
+        ctx.drawImage(vRear,
+          (W - vw * s) / 2 + panX + shiftX,
+          (H - vh * s) / 2 + panY + shiftY,
+          vw * s, vh * s
+        );
       } else {
-        log('Only one stream active — simultaneous access may not be supported.', 'err');
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
       }
+
+      requestAnimationFrame(loop);
+    }
+
+    // ── Boot ──────────────────────────────────────────────────
+    try {
+      await startCamera(vRear, {
+        facingMode: { exact: 'environment' },
+        width: { ideal: 1920 }, height: { ideal: 1080 },
+      });
+      rearReady = true;
+      setStatus('Loading face tracker…');
+      requestAnimationFrame(loop);
+
+      const [, frontResult] = await Promise.allSettled([
+        initTracker(),
+        startCamera(vFront, {
+          facingMode: { exact: 'user' },
+          width: { ideal: 640 }, height: { ideal: 480 },
+        }),
+      ]);
+
+      if (frontResult.status === 'fulfilled') frontReady = true;
+      else setStatus('Front cam: ' + frontResult.reason.message);
+
+    } catch (e) {
+      setStatus('Error: ' + e.message);
     }
   </script>
 </body>
