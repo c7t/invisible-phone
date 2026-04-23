@@ -47,6 +47,7 @@
   </style>
 </head>
 <body>
+  <video id="vRear" autoplay playsinline muted style="position:fixed;left:-200%;width:1px;height:1px"></video>
   <div id="status"></div>
   <div id="videos">
     <div class="cam-wrap" id="wrap-front">
@@ -55,8 +56,8 @@
       <canvas id="cvFront" class="overlay"></canvas>
     </div>
     <div class="cam-wrap" id="wrap-rear">
-      <span class="cam-label">Rear — identity</span>
-      <video id="vRear" autoplay playsinline muted></video>
+      <span class="cam-label">Rear — identity transform</span>
+      <canvas id="cvRear"></canvas>
     </div>
   </div>
 
@@ -68,7 +69,9 @@
     const vFront    = document.getElementById('vFront');
     const vRear     = document.getElementById('vRear');
     const cvFront   = document.getElementById('cvFront');
+    const cvRear    = document.getElementById('cvRear');
     const ctx       = cvFront.getContext('2d');
+    const rCtx      = cvRear.getContext('2d', { alpha: false });
 
     const lines = [];
     function log(msg, cls = '') {
@@ -118,13 +121,24 @@
       updateLast('Rear: ' + e.message, 'err');
     }
 
-    // ── Match canvas to video element size ────────────────────
+    // ── Match canvases to video element sizes ─────────────────
     function syncCanvas() {
       cvFront.width  = vFront.videoWidth  || vFront.clientWidth;
       cvFront.height = vFront.videoHeight || vFront.clientHeight;
     }
+    function syncRearCanvas() {
+      // Display width = full page width; height = 16:9 of that
+      const W = window.innerWidth;
+      const vw = vRear.videoWidth || 1280;
+      const vh = vRear.videoHeight || 720;
+      cvRear.style.width  = W + 'px';
+      cvRear.style.height = Math.round(W * vh / vw) + 'px';
+      cvRear.width  = vw;
+      cvRear.height = vh;
+    }
     if (frontReady) syncCanvas();
-    window.addEventListener('resize', syncCanvas);
+    if (rearReady) syncRearCanvas();
+    window.addEventListener('resize', () => { syncCanvas(); syncRearCanvas(); });
 
     // ── MediaPipe ─────────────────────────────────────────────
     log('Loading MediaPipe…', 'wait');
@@ -219,6 +233,19 @@
           }
           trackTs = ts;
         }
+      }
+
+      // Rear canvas — identity transform (pan=0, zoom=1, gain=0)
+      if (rearReady && vRear.readyState >= 2 && vRear.videoWidth) {
+        if (cvRear.width !== vRear.videoWidth) syncRearCanvas();
+        const W = cvRear.width, H = cvRear.height;
+        const vw = vRear.videoWidth, vh = vRear.videoHeight;
+        const s = Math.max(W / vw, H / vh); // cover scale, zoom=1
+        rCtx.drawImage(vRear,
+          (W - vw * s) / 2,  // panX=0, shiftX=0
+          (H - vh * s) / 2,  // panY=0, shiftY=0
+          vw * s, vh * s
+        );
       }
 
       requestAnimationFrame(loop);
