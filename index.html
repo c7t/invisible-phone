@@ -2,10 +2,131 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Invisible Phone</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Invisible Phone — Stream Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; color: #fff; font-family: monospace; }
+    #status {
+      padding: 12px;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 80px;
+    }
+    .line { margin-bottom: 4px; }
+    .ok  { color: #4f4; }
+    .err { color: #f44; }
+    .wait { color: #ff4; }
+    #videos {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 8px;
+    }
+    .cam-wrap {
+      position: relative;
+    }
+    .cam-label {
+      position: absolute;
+      top: 6px; left: 8px;
+      background: rgba(0,0,0,0.6);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      z-index: 1;
+    }
+    video {
+      width: 100%;
+      border-radius: 6px;
+      display: block;
+      background: #111;
+    }
+    #btn {
+      display: block;
+      margin: 16px auto;
+      padding: 12px 32px;
+      font-size: 16px;
+      font-family: monospace;
+      background: #222;
+      color: #fff;
+      border: 1px solid #555;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    #btn:active { background: #444; }
+  </style>
 </head>
 <body>
-  <h1>Invisible Phone</h1>
+  <div id="status">
+    <div class="line wait">Tap the button to start the stream test.</div>
+  </div>
+  <button id="btn" onclick="runTest()">Start stream test</button>
+  <div id="videos">
+    <div class="cam-wrap" id="wrap-rear" style="display:none">
+      <span class="cam-label">Rear camera</span>
+      <video id="vid-rear" autoplay playsinline muted></video>
+    </div>
+    <div class="cam-wrap" id="wrap-front" style="display:none">
+      <span class="cam-label">Front camera</span>
+      <video id="vid-front" autoplay playsinline muted></video>
+    </div>
+  </div>
+
+  <script>
+    function log(msg, cls) {
+      const d = document.getElementById('status');
+      const line = document.createElement('div');
+      line.className = 'line ' + (cls || '');
+      line.textContent = msg;
+      d.appendChild(line);
+    }
+
+    async function runTest() {
+      document.getElementById('btn').style.display = 'none';
+      document.getElementById('status').innerHTML = '';
+
+      log('Requesting rear camera…', 'wait');
+      let rearStream;
+      try {
+        rearStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        const track = rearStream.getVideoTracks()[0];
+        const s = track.getSettings();
+        log(`Rear: OK — ${s.width}x${s.height} (${track.label})`, 'ok');
+        const vidR = document.getElementById('vid-rear');
+        vidR.srcObject = rearStream;
+        document.getElementById('wrap-rear').style.display = 'block';
+      } catch (e) {
+        log('Rear: FAILED — ' + e.message, 'err');
+      }
+
+      log('Requesting front camera…', 'wait');
+      let frontStream;
+      try {
+        frontStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: 'user' }, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        const track = frontStream.getVideoTracks()[0];
+        const s = track.getSettings();
+        log(`Front: OK — ${s.width}x${s.height} (${track.label})`, 'ok');
+        const vidF = document.getElementById('vid-front');
+        vidF.srcObject = frontStream;
+        document.getElementById('wrap-front').style.display = 'block';
+      } catch (e) {
+        log('Front: FAILED — ' + e.message, 'err');
+      }
+
+      if (rearStream && frontStream) {
+        log('Both streams active simultaneously — ready to build!', 'ok');
+      } else if (!rearStream && !frontStream) {
+        log('Both streams failed. Check permissions.', 'err');
+      } else {
+        log('Only one stream active — simultaneous access may not be supported.', 'err');
+      }
+    }
+  </script>
 </body>
 </html>
