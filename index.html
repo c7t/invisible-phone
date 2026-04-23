@@ -113,7 +113,11 @@
     let eyeX = 0, eyeY = 0;
 
     gainEl.addEventListener('input', () => {
-      gain = parseFloat(gainEl.value);
+      const newGain = parseFloat(gainEl.value);
+      // keep image position fixed; only future head movement uses the new gain
+      panX -= eyeX * (newGain - gain) * canvas.width;
+      panY -= eyeY * (newGain - gain) * canvas.height;
+      gain = newGain;
       gainValEl.textContent = gain.toFixed(2);
     });
 
