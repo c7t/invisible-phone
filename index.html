@@ -58,60 +58,9 @@
   </div></div>
 
   <script type="module">
-    // ── Tracker Web Worker (inline module blob) ───────────────
-    // Running MediaPipe in a worker keeps the render RAF unblocked.
-    const TRACKER_SRC = `
-import { FaceLandmarker, FilesetResolver }
-  from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+    import { FaceLandmarker, FilesetResolver }
+      from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 
-let landmarker = null;
-
-async function init() {
-  const vision = await FilesetResolver.forVisionTasks(
-    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-  );
-  const opts = {
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-    },
-    runningMode: 'VIDEO',
-    numFaces: 1,
-    outputFaceBlendshapes: false,
-    outputFacialTransformationMatrixes: true,
-  };
-  // try GPU first; fall back to CPU if WebGL unavailable in this worker
-  try {
-    landmarker = await FaceLandmarker.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'GPU' } });
-  } catch {
-    landmarker = await FaceLandmarker.createFromOptions(vision, { ...opts, baseOptions: { ...opts.baseOptions, delegate: 'CPU' } });
-  }
-  self.postMessage({ type: 'ready' });
-}
-
-self.addEventListener('message', async e => {
-  if (e.data.type === 'init') {
-    await init();
-  } else if (e.data.type === 'frame') {
-    const { bitmap, ts } = e.data;
-    if (!landmarker) { bitmap.close(); return; }
-    const res = landmarker.detectForVideo(bitmap, ts);
-    bitmap.close();
-    const mat = res.facialTransformationMatrixes?.[0]?.data;
-    if (mat) {
-      self.postMessage({ type: 'result', tx: mat[12], ty: mat[13], tz: mat[14] });
-    } else {
-      self.postMessage({ type: 'noresult' });
-    }
-  }
-});
-`;
-
-    const trackerWorker = new Worker(
-      URL.createObjectURL(new Blob([TRACKER_SRC], { type: 'text/javascript' })),
-      { type: 'module' }
-    );
-
-    // ── Elements ──────────────────────────────────────────────
     const canvas    = document.getElementById('c');
     const ctx       = canvas.getContext('2d', { alpha: false });
     const vRear     = document.getElementById('vRear');
@@ -133,33 +82,8 @@ self.addEventListener('message', async e => {
     let gain = -6.6;
     let eyeX = 0, eyeY = 0;
     let tzSmooth = null, tzRef = null;
-    let workerReady = false, workerBusy = false;
     let rearReady = false, frontReady = false;
-    let trackerAnnounced = false;
-
-    // ── Worker result handler ─────────────────────────────────
-    trackerWorker.addEventListener('message', e => {
-      if (e.data.type === 'ready') {
-        workerReady = true;
-      } else if (e.data.type === 'result') {
-        if (!trackerAnnounced) { trackerAnnounced = true; hintEl.classList.add('gone'); }
-        const { tx, ty, tz } = e.data;
-        const d = Math.abs(tz) || 1;
-        eyeX = eyeX * 0.7 + (tx / d) * 0.3;
-        eyeY = eyeY * 0.7 + (ty / d) * 0.3;
-        tzSmooth = tzSmooth === null ? d : tzSmooth * 0.9 + d * 0.1;
-        if (tzRef === null) tzRef = tzSmooth;
-        workerBusy = false;
-      } else if (e.data.type === 'noresult') {
-        eyeX *= 0.9; eyeY *= 0.9;
-        workerBusy = false;
-      }
-    });
-
-    trackerWorker.postMessage({ type: 'init' });
-    trackerWorker.addEventListener('error', e => {
-      statusEl.textContent = 'Worker error: ' + (e.message || 'unknown — check console');
-    });
+    let landmarker = null, trackerAnnounced = false;
 
     // ── Gain slider ───────────────────────────────────────────
     gainEl.addEventListener('input', () => {
@@ -219,13 +143,27 @@ self.addEventListener('message', async e => {
       await new Promise(r => { video.onloadeddata = r; });
     }
 
-    // ── Front-camera tracking via requestVideoFrameCallback ───
+    // ── Face tracker via requestVideoFrameCallback ────────────
+    // Fires on every delivered front-camera frame — no artificial throttle.
+    // GPU delegate returns quickly so it doesn't block RAF meaningfully.
     function trackFrame(now) {
-      if (workerReady && !workerBusy && vFront.readyState >= 2) {
-        workerBusy = true;
-        createImageBitmap(vFront).then(bitmap => {
-          trackerWorker.postMessage({ type: 'frame', bitmap, ts: now }, [bitmap]);
-        });
+      if (landmarker && vFront.readyState >= 2) {
+        if (!trackerAnnounced) {
+          trackerAnnounced = true;
+          hintEl.classList.add('gone');
+        }
+        const res = landmarker.detectForVideo(vFront, now);
+        const mat = res.facialTransformationMatrixes?.[0]?.data;
+        if (mat) {
+          const tx = mat[12], ty = mat[13], tz = mat[14];
+          const d = Math.abs(tz) || 1;
+          eyeX = eyeX * 0.7 + (tx / d) * 0.3;
+          eyeY = eyeY * 0.7 + (ty / d) * 0.3;
+          tzSmooth = tzSmooth === null ? d : tzSmooth * 0.9 + d * 0.1;
+          if (tzRef === null) tzRef = tzSmooth;
+        } else {
+          eyeX *= 0.9; eyeY *= 0.9;
+        }
       }
       vFront.requestVideoFrameCallback(trackFrame);
     }
@@ -259,9 +197,6 @@ self.addEventListener('message', async e => {
     }, 500);
 
     // ── Boot ──────────────────────────────────────────────────
-    // Rear cam, front cam, and worker all initialise independently.
-    // trackFrame checks workerReady before sending frames, so the
-    // RVCB loop can start as soon as the front cam is ready.
     try {
       await openCamera(vRear, {
         facingMode: { exact: 'environment' },
@@ -271,17 +206,38 @@ self.addEventListener('message', async e => {
       statusEl.textContent = 'Loading face tracker…';
       requestAnimationFrame(loop);
     } catch (e) {
-      statusEl.textContent = 'Rear cam error: ' + e.message;
+      statusEl.textContent = 'Rear cam: ' + e.message;
     }
 
-    openCamera(vFront, {
-      facingMode: { exact: 'user' },
-      width: { ideal: 640 }, height: { ideal: 480 },
-    }).then(() => {
-      frontReady = true;
-      vFront.requestVideoFrameCallback(trackFrame);
-    }).catch(e => {
-      statusEl.textContent = 'Front cam: ' + e.message;
+    // front cam and tracker load in parallel; RVCB starts as soon
+    // as the front cam is ready — trackFrame checks landmarker itself
+    Promise.allSettled([
+      FaceLandmarker.createFromOptions(
+        await FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+        ),
+        {
+          baseOptions: {
+            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          outputFaceBlendshapes: false,
+          outputFacialTransformationMatrixes: true,
+        }
+      ).then(lm => { landmarker = lm; }),
+
+      openCamera(vFront, {
+        facingMode: { exact: 'user' },
+        width: { ideal: 640 }, height: { ideal: 480 },
+      }).then(() => {
+        frontReady = true;
+        vFront.requestVideoFrameCallback(trackFrame);
+      }),
+    ]).then(([lmResult, camResult]) => {
+      if (lmResult.status   === 'rejected') statusEl.textContent = 'Tracker: '  + lmResult.reason.message;
+      if (camResult.status  === 'rejected') statusEl.textContent = 'Front cam: ' + camResult.reason.message;
     });
   </script>
 </body>
