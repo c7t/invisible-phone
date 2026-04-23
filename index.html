@@ -135,12 +135,16 @@
       const stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
       video.srcObject = stream;
       video.play();
-      const track = stream.getVideoTracks()[0];
-      const caps = track.getCapabilities?.();
-      if (caps?.zoom) {
-        try { await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] }); } catch {}
+      // set minimum zoom for widest FOV before waiting for first frame
+      try {
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities?.();
+        if (caps?.zoom) await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] });
+      } catch {}
+      // loadeddata may have already fired during the above; check readyState first
+      if (video.readyState < 2) {
+        await new Promise(r => video.addEventListener('loadeddata', r, { once: true }));
       }
-      await new Promise(r => { video.onloadeddata = r; });
     }
 
     // ── Face tracker via requestVideoFrameCallback ────────────
