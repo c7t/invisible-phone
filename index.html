@@ -3,149 +3,172 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Invisible Phone — Debug</title>
+  <title>Invisible Phone</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #000; color: #fff; font-family: monospace; }
-    #status {
-      padding: 10px 12px;
-      font-size: 12px;
-      line-height: 1.5;
-      background: rgba(0,0,0,0.8);
-      white-space: pre-wrap;
-    }
-    .line { margin-bottom: 2px; }
-    .ok   { color: #4f4; }
-    .err  { color: #f44; }
-    .wait { color: #ff4; }
-    .info { color: #adf; }
-    #videos {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      padding: 4px;
-    }
-    .cam-wrap {
-      position: relative;
-    }
-    .cam-label {
-      position: absolute; top: 6px; left: 8px;
-      background: rgba(0,0,0,0.6);
-      padding: 2px 6px; border-radius: 4px;
-      font-size: 11px; z-index: 1;
-    }
-    canvas.overlay {
-      position: absolute; inset: 0;
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+
+    canvas {
+      position: fixed; inset: 0;
       width: 100%; height: 100%;
+      touch-action: none;
     }
-    video {
-      display: block;
-      width: 100%;
-      border-radius: 6px;
-      background: #111;
+
+    video { position: fixed; left: -200%; width: 1px; height: 1px; }
+
+    #status {
+      position: fixed; top: 0; left: 0; right: 0;
+      padding: 10px 14px;
+      font: 12px/1.5 monospace;
+      color: #ddd;
+      background: rgba(0,0,0,0.6);
+      pointer-events: none;
+      transition: opacity 0.8s;
+    }
+    #status.hidden { opacity: 0; }
+
+    #controls {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+    }
+    #controls label {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font: 11px monospace;
+      color: #999;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    #gainVal { color: #ddd; font-variant-numeric: tabular-nums; }
+    #gain { display: block; width: 100%; accent-color: #fff; cursor: pointer; }
+
+    #hint {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none;
+      transition: opacity 0.6s;
+    }
+    #hint.gone { opacity: 0; }
+    #hint div {
+      background: rgba(0,0,0,0.78);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 14px;
+      padding: 20px 24px;
+      max-width: 290px;
+      font: 13px/1.75 monospace;
+      color: #bbb;
+      text-align: center;
     }
   </style>
 </head>
 <body>
-  <video id="vRear" autoplay playsinline muted style="position:fixed;left:-200%;width:1px;height:1px"></video>
-  <div id="status"></div>
-  <div id="videos">
-    <div class="cam-wrap" id="wrap-front">
-      <span class="cam-label">Front — face tracking</span>
-      <video id="vFront" autoplay playsinline muted></video>
-      <canvas id="cvFront" class="overlay"></canvas>
-    </div>
-    <div class="cam-wrap" id="wrap-rear">
-      <span class="cam-label">Rear — identity transform</span>
-      <canvas id="cvRear"></canvas>
-    </div>
+  <canvas id="c"></canvas>
+  <video id="vRear"  autoplay playsinline muted></video>
+  <video id="vFront" autoplay playsinline muted></video>
+
+  <div id="status">Starting cameras…</div>
+
+  <div id="controls">
+    <label for="gain">
+      Parallax gain
+      <span id="gainVal">0.50</span>
+    </label>
+    <input type="range" id="gain" min="-2" max="2" step="0.02" value="0.5">
   </div>
 
+  <div id="hint"><div>
+    Drag to pan &nbsp;·&nbsp; Pinch to zoom<br>
+    Slide to tune parallax<br><br>
+    Aim at a straight edge crossing the frame. Slide until the line looks continuous.<br><br>
+    Double-tap to reset.
+  </div></div>
+
   <script type="module">
-    import { FaceLandmarker, FilesetResolver, DrawingUtils }
+    import { FaceLandmarker, FilesetResolver }
       from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 
-    const statusEl  = document.getElementById('status');
-    const vFront    = document.getElementById('vFront');
+    const canvas    = document.getElementById('c');
+    const ctx       = canvas.getContext('2d', { alpha: false });
     const vRear     = document.getElementById('vRear');
-    const cvFront   = document.getElementById('cvFront');
-    const cvRear    = document.getElementById('cvRear');
-    const ctx       = cvFront.getContext('2d');
-    const rCtx      = cvRear.getContext('2d', { alpha: false });
+    const vFront    = document.getElementById('vFront');
+    const statusEl  = document.getElementById('status');
+    const gainEl    = document.getElementById('gain');
+    const gainValEl = document.getElementById('gainVal');
+    const hintEl    = document.getElementById('hint');
 
-    const lines = [];
-    function log(msg, cls = '') {
-      lines.push({ msg, cls });
-      statusEl.innerHTML = lines.map(l =>
-        `<div class="line ${l.cls}">${l.msg}</div>`
-      ).join('');
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    // ── Canvas sizing ─────────────────────────────────────────
+    function resize() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
     }
-    function updateLast(msg, cls = '') {
-      if (lines.length) { lines[lines.length-1] = { msg, cls }; }
-      else lines.push({ msg, cls });
-      statusEl.innerHTML = lines.map(l =>
-        `<div class="line ${l.cls}">${l.msg}</div>`
-      ).join('');
-    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // ── Transform state ───────────────────────────────────────
+    let panX = 0, panY = 0, zoom = 1, gain = 0.5;
+    let eyeX = 0, eyeY = 0;
+
+    gainEl.addEventListener('input', () => {
+      gain = parseFloat(gainEl.value);
+      gainValEl.textContent = gain.toFixed(2);
+    });
+
+    // ── Pointer gestures ──────────────────────────────────────
+    const pts = new Map();
+    let pinchD = null, lastTap = 0;
+
+    canvas.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      if (pts.size === 1) {
+        const now = Date.now();
+        if (now - lastTap < 300) { panX = panY = 0; zoom = 1; }
+        lastTap = now;
+      }
+      if (pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        pinchD = Math.hypot(b[0]-a[0], b[1]-a[1]);
+      }
+    });
+
+    canvas.addEventListener('pointermove', e => {
+      if (!pts.has(e.pointerId)) return;
+      e.preventDefault();
+      const prev = pts.get(e.pointerId);
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      if (pts.size === 1) {
+        panX += e.clientX - prev[0];
+        panY += e.clientY - prev[1];
+      } else if (pts.size >= 2) {
+        const [a, b] = [...pts.values()];
+        const d = Math.hypot(b[0]-a[0], b[1]-a[1]);
+        if (pinchD) zoom = Math.max(0.2, Math.min(6, zoom * d / pinchD));
+        pinchD = d;
+      }
+    });
+
+    const endPtr = e => { pts.delete(e.pointerId); if (pts.size < 2) pinchD = null; };
+    canvas.addEventListener('pointerup',     endPtr);
+    canvas.addEventListener('pointercancel', endPtr);
 
     // ── Cameras ───────────────────────────────────────────────
-    log('Opening front camera…', 'wait');
-    let frontReady = false, rearReady = false;
+    let rearReady = false, frontReady = false;
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: 'user' }, width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-      vFront.srcObject = stream;
-      await new Promise(r => { vFront.onloadeddata = r; });
-      const s = vFront.srcObject.getVideoTracks()[0].getSettings();
-      frontReady = true;
-      updateLast(`Front: ${s.width}x${s.height} — OK`, 'ok');
-    } catch (e) {
-      updateLast('Front: ' + e.message, 'err');
+    async function openCamera(video, constraints) {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+      video.srcObject = stream;
+      video.play();
+      await new Promise(r => { video.onloadeddata = r; });
     }
 
-    log('Opening rear camera…', 'wait');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      vRear.srcObject = stream;
-      vRear.play();
-      await new Promise(r => { vRear.onloadeddata = r; });
-      const s = vRear.srcObject.getVideoTracks()[0].getSettings();
-      rearReady = true;
-      updateLast(`Rear: ${s.width}x${s.height} — OK`, 'ok');
-    } catch (e) {
-      updateLast('Rear: ' + e.message, 'err');
-    }
+    // ── Face tracker ──────────────────────────────────────────
+    let landmarker = null;
 
-    // ── Match canvases to video element sizes ─────────────────
-    function syncCanvas() {
-      cvFront.width  = vFront.videoWidth  || vFront.clientWidth;
-      cvFront.height = vFront.videoHeight || vFront.clientHeight;
-    }
-    function syncRearCanvas() {
-      // Display width = full page width; height = 16:9 of that
-      const W = window.innerWidth;
-      const vw = vRear.videoWidth || 1280;
-      const vh = vRear.videoHeight || 720;
-      cvRear.style.width  = W + 'px';
-      cvRear.style.height = Math.round(W * vh / vw) + 'px';
-      cvRear.width  = vw;
-      cvRear.height = vh;
-    }
-    if (frontReady) syncCanvas();
-    if (rearReady) syncRearCanvas();
-    window.addEventListener('resize', () => { syncCanvas(); syncRearCanvas(); });
-
-    // ── MediaPipe ─────────────────────────────────────────────
-    log('Loading MediaPipe…', 'wait');
-    let landmarker = null, drawUtils = null;
-
-    try {
+    async function initTracker() {
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
       );
@@ -159,113 +182,84 @@
         outputFaceBlendshapes: false,
         outputFacialTransformationMatrixes: false,
       });
-      drawUtils = new DrawingUtils(ctx);
-      updateLast('MediaPipe: loaded — OK', 'ok');
-    } catch (e) {
-      updateLast('MediaPipe: ' + e.message, 'err');
     }
 
-    // ── Tracking loop ─────────────────────────────────────────
-    let eyeX = 0, eyeY = 0, faceDetected = false;
-    let trackTs = 0, infoLine = null;
+    // ── Main loop ─────────────────────────────────────────────
+    let trackTs = 0, trackerAnnounced = false;
 
     function loop(ts) {
-      // Sync canvas to video size if needed
-      if (cvFront.width !== vFront.videoWidth && vFront.videoWidth) syncCanvas();
-
-      if (landmarker && frontReady && vFront.readyState >= 2 && vFront.videoWidth) {
+      // Face tracking (~30 fps)
+      if (landmarker && frontReady && vFront.readyState >= 2) {
+        if (!trackerAnnounced) {
+          trackerAnnounced = true;
+          setStatus('Tracking active — move your head');
+          setTimeout(() => { statusEl.classList.add('hidden'); hintEl.classList.add('gone'); }, 2500);
+        }
         if (ts - trackTs > 33) {
           const res = landmarker.detectForVideo(vFront, ts);
-          ctx.clearRect(0, 0, cvFront.width, cvFront.height);
-
           if (res.faceLandmarks.length > 0) {
-            faceDetected = true;
             const lm = res.faceLandmarks[0];
-
-            // Draw full face mesh
-            drawUtils.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_TESSELATION,
-              { color: 'rgba(255,255,255,0.08)', lineWidth: 0.5 });
-            drawUtils.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
-              { color: '#30f', lineWidth: 1 });
-            drawUtils.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
-              { color: '#30f', lineWidth: 1 });
-            drawUtils.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
-              { color: '#0ff', lineWidth: 1.5 });
-            drawUtils.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
-              { color: '#0ff', lineWidth: 1.5 });
-
-            // Iris centers (468 = left, 473 = right — subject anatomical)
-            const W = cvFront.width, H = cvFront.height;
-            const lx = lm[468].x * W, ly = lm[468].y * H;
-            const rx = lm[473].x * W, ry = lm[473].y * H;
-            const cx = (lx + rx) / 2, cy = (ly + ry) / 2;
-
-            ctx.fillStyle = '#ff0';
-            ctx.beginPath(); ctx.arc(lx, ly, 4, 0, Math.PI*2); ctx.fill();
-            ctx.beginPath(); ctx.arc(rx, ry, 4, 0, Math.PI*2); ctx.fill();
-
-            // Crosshair at midpoint
-            ctx.strokeStyle = '#ff0'; ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.moveTo(cx-10, cy); ctx.lineTo(cx+10, cy); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(cx, cy-10); ctx.lineTo(cx, cy+10); ctx.stroke();
-
-            // eyeX/Y normalized (centered at 0)
             const ix = (lm[468].x + lm[473].x) / 2 - 0.5;
             const iy = (lm[468].y + lm[473].y) / 2 - 0.5;
             eyeX = eyeX * 0.7 + ix * 0.3;
             eyeY = eyeY * 0.7 + iy * 0.3;
-
-            // Label
-            ctx.fillStyle = '#ff0';
-            ctx.font = '11px monospace';
-            ctx.fillText(`eye x:${eyeX.toFixed(3)}  y:${eyeY.toFixed(3)}`, 6, H - 8);
-
-            if (!infoLine) infoLine = lines.length;
-            if (infoLine !== null) {
-              lines[infoLine] = { msg: `Face: eyeX=${eyeX.toFixed(3)}  eyeY=${eyeY.toFixed(3)}`, cls: 'info' };
-              statusEl.innerHTML = lines.map(l => `<div class="line ${l.cls}">${l.msg}</div>`).join('');
-            }
           } else {
-            faceDetected = false;
-            ctx.clearRect(0, 0, cvFront.width, cvFront.height);
-            ctx.fillStyle = 'rgba(255,60,60,0.6)';
-            ctx.font = '13px monospace';
-            ctx.fillText('No face detected', 8, 20);
+            eyeX *= 0.9; eyeY *= 0.9;
           }
           trackTs = ts;
         }
       }
 
-      // Rear canvas — identity transform (pan=0, zoom=1, gain=0)
-      if (rearReady) {
-        if (cvRear.width !== vRear.videoWidth && vRear.videoWidth) syncRearCanvas();
-        const W = cvRear.width, H = cvRear.height;
+      // Render rear camera
+      const W = canvas.width, H = canvas.height;
+      if (rearReady && vRear.readyState >= 2 && vRear.videoWidth) {
         const vw = vRear.videoWidth, vh = vRear.videoHeight;
-
-        // Live diagnostics (update ~1/s)
-        if (Math.floor(ts / 1000) !== Math.floor((ts - 16) / 1000)) {
-          const diagIdx = lines.findIndex(l => l.msg.startsWith('rear:'));
-          const diagMsg = `rear: readyState=${vRear.readyState} videoW=${vw} paused=${vRear.paused} cv=${W}x${H}`;
-          if (diagIdx >= 0) lines[diagIdx] = { msg: diagMsg, cls: 'info' };
-          else lines.push({ msg: diagMsg, cls: 'info' });
-          statusEl.innerHTML = lines.map(l => `<div class="line ${l.cls}">${l.msg}</div>`).join('');
-        }
-
-        if (vRear.readyState >= 2 && vw) {
-          const s = Math.max(W / vw, H / vh);
-          rCtx.drawImage(vRear, (W - vw * s) / 2, (H - vh * s) / 2, vw * s, vh * s);
-        }
+        const s  = Math.max(W / vw, H / vh) * zoom;
+        const shiftX = eyeX * gain * W;
+        const shiftY = eyeY * gain * H;
+        ctx.drawImage(vRear,
+          (W - vw * s) / 2 + panX + shiftX,
+          (H - vh * s) / 2 + panY + shiftY,
+          vw * s, vh * s
+        );
+      } else {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
       }
 
       requestAnimationFrame(loop);
     }
 
-    if (landmarker) {
-      log(faceDetected ? '' : 'Waiting for face…', 'wait');
-      infoLine = lines.length - 1;
-    }
+    // ── Boot ──────────────────────────────────────────────────
+    try {
+      await openCamera(vRear, {
+        facingMode: { exact: 'environment' },
+        width: { ideal: 1920 }, height: { ideal: 1080 },
+      });
+      rearReady = true;
+      setStatus('Loading face tracker…');
+      requestAnimationFrame(loop);
 
-    requestAnimationFrame(loop);
+      const [trackerResult, frontResult] = await Promise.allSettled([
+        initTracker(),
+        openCamera(vFront, {
+          facingMode: { exact: 'user' },
+          width: { ideal: 640 }, height: { ideal: 480 },
+        }),
+      ]);
+
+      if (frontResult.status === 'fulfilled') {
+        frontReady = true;
+      } else {
+        setStatus('Front cam: ' + frontResult.reason.message);
+      }
+      if (trackerResult.status === 'rejected') {
+        setStatus('Tracker: ' + trackerResult.reason.message);
+      }
+
+    } catch (e) {
+      setStatus('Error: ' + e.message);
+    }
   </script>
 </body>
 </html>
