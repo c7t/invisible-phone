@@ -18,14 +18,12 @@
 
     #status {
       position: fixed; top: 0; left: 0; right: 0;
-      padding: 10px 14px;
-      font: 12px/1.5 monospace;
-      color: #ddd;
-      background: rgba(0,0,0,0.6);
+      padding: 8px 12px;
+      font: 11px/1.4 monospace;
+      color: #aaa;
+      background: rgba(0,0,0,0.55);
       pointer-events: none;
-      transition: opacity 0.8s;
     }
-    #status.hidden { opacity: 0; }
 
     #controls {
       position: fixed; bottom: 0; left: 0; right: 0;
@@ -34,37 +32,29 @@
       backdrop-filter: blur(8px);
     }
     #controls label {
-      display: flex; justify-content: space-between; align-items: baseline;
-      font: 11px monospace;
-      color: #999;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      margin-bottom: 4px;
-      padding: 0 12px;
+      display: flex; justify-content: space-between;
+      font: 11px monospace; color: #999;
+      letter-spacing: 0.06em; text-transform: uppercase;
+      margin-bottom: 4px; padding: 0 12px;
     }
-    .gainVal { color: #ddd; font-variant-numeric: tabular-nums; }
-    #gainX, #gainY {
+    #gainVal { color: #ddd; font-variant-numeric: tabular-nums; }
+    #gain {
       display: block; width: 100%;
-      margin: 0 0 8px; padding: 0;
+      margin: 0; padding: 0;
       accent-color: #fff; cursor: pointer;
     }
 
     #hint {
       position: fixed; inset: 0;
       display: flex; align-items: center; justify-content: center;
-      pointer-events: none;
-      transition: opacity 0.6s;
+      pointer-events: none; transition: opacity 0.6s;
     }
     #hint.gone { opacity: 0; }
     #hint div {
       background: rgba(0,0,0,0.78);
       border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 14px;
-      padding: 20px 24px;
-      max-width: 290px;
-      font: 13px/1.75 monospace;
-      color: #bbb;
-      text-align: center;
+      border-radius: 14px; padding: 20px 24px; max-width: 290px;
+      font: 13px/1.75 monospace; color: #bbb; text-align: center;
     }
   </style>
 </head>
@@ -76,10 +66,8 @@
   <div id="status">Starting cameras…</div>
 
   <div id="controls">
-    <label for="gainX">Horizontal <span id="gainXVal" class="gainVal">-1.0</span></label>
-    <input type="range" id="gainX" min="-10" max="0" step="0.1" value="-1">
-    <label for="gainY">Vertical <span id="gainYVal" class="gainVal">-1.0</span></label>
-    <input type="range" id="gainY" min="-10" max="0" step="0.1" value="-1">
+    <label for="gain">Parallax <span id="gainVal">-6.6</span></label>
+    <input type="range" id="gain" min="-10" max="0" step="0.1" value="-6.6">
   </div>
 
   <div id="hint"><div>
@@ -93,44 +81,31 @@
     import { FaceLandmarker, FilesetResolver }
       from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 
-    const canvas    = document.getElementById('c');
-    const ctx       = canvas.getContext('2d', { alpha: false });
-    const vRear     = document.getElementById('vRear');
-    const vFront    = document.getElementById('vFront');
-    const statusEl  = document.getElementById('status');
-    const gainXEl    = document.getElementById('gainX');
-    const gainYEl    = document.getElementById('gainY');
-    const gainXValEl = document.getElementById('gainXVal');
-    const gainYValEl = document.getElementById('gainYVal');
-    const hintEl    = document.getElementById('hint');
-
-    function setStatus(msg) { statusEl.textContent = msg; }
+    const canvas   = document.getElementById('c');
+    const ctx      = canvas.getContext('2d', { alpha: false });
+    const vRear    = document.getElementById('vRear');
+    const vFront   = document.getElementById('vFront');
+    const statusEl = document.getElementById('status');
+    const gainEl   = document.getElementById('gain');
+    const gainValEl = document.getElementById('gainVal');
+    const hintEl   = document.getElementById('hint');
 
     // ── Canvas sizing ─────────────────────────────────────────
-    function resize() {
-      canvas.width  = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
+    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
     resize();
     window.addEventListener('resize', resize);
 
     // ── Transform state ───────────────────────────────────────
-    let panX = 0, panY = 0, zoom = 1;
-    let gainX = -1, gainY = -1;
+    let panX = 0, panY = 0, zoom = 1, gain = -6.6;
     let eyeX = 0, eyeY = 0;
-    let tzSmooth = null, tzRef = null; // for depth-driven zoom
+    let tzSmooth = null, tzRef = null;
 
-    gainXEl.addEventListener('input', () => {
-      const v = parseFloat(gainXEl.value);
-      panX -= eyeX * (v - gainX) * canvas.width;
-      gainX = v;
-      gainXValEl.textContent = v.toFixed(2);
-    });
-    gainYEl.addEventListener('input', () => {
-      const v = parseFloat(gainYEl.value);
-      panY -= eyeY * (v - gainY) * canvas.height;
-      gainY = v;
-      gainYValEl.textContent = v.toFixed(2);
+    gainEl.addEventListener('input', () => {
+      const v = parseFloat(gainEl.value);
+      panX -= eyeX * (v - gain) * canvas.width;
+      panY -= eyeY * (v - gain) * canvas.height;
+      gain = v;
+      gainValEl.textContent = v.toFixed(1);
     });
 
     // ── Pointer gestures ──────────────────────────────────────
@@ -171,20 +146,21 @@
     canvas.addEventListener('pointerup',     endPtr);
     canvas.addEventListener('pointercancel', endPtr);
 
-    // ── Cameras ───────────────────────────────────────────────
+    // ── Cameras — request widest FOV ──────────────────────────
     let rearReady = false, frontReady = false;
 
     async function openCamera(video, constraints) {
       const stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
       video.srcObject = stream;
       video.play();
+      // set minimum zoom for widest available field of view
+      const track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities?.();
+      if (caps?.zoom) {
+        try { await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] }); } catch {}
+      }
       await new Promise(r => { video.onloadeddata = r; });
     }
-
-    // No gyro needed. For a scene at infinity the parallax angle is exactly
-    // tx/tz from the front camera — phone rotation shifts the face in the
-    // front frame by the same angle as the rotation, which is the correct
-    // parallax signal. The gain sliders calibrate sign and magnitude.
 
     // ── Face tracker ──────────────────────────────────────────
     let landmarker = null;
@@ -205,46 +181,42 @@
       });
     }
 
-    // ── Main loop ─────────────────────────────────────────────
-    let trackTs = 0, trackerAnnounced = false;
+    // ── Front-camera tracking via requestVideoFrameCallback ───
+    // Fires on every delivered front-camera frame rather than on
+    // an artificial 33ms RAF throttle — reduces tracking latency.
+    let trackerAnnounced = false;
 
-    function loop(ts) {
-      // Face tracking (~30 fps)
-      if (landmarker && frontReady && vFront.readyState >= 2) {
+    function trackFrame(now) {
+      if (landmarker && vFront.readyState >= 2) {
         if (!trackerAnnounced) {
           trackerAnnounced = true;
-          setStatus('Tracking active — move your head');
-          setTimeout(() => { statusEl.classList.add('hidden'); hintEl.classList.add('gone'); }, 2500);
+          hintEl.classList.add('gone');
         }
-        if (ts - trackTs > 33) {
-          const res = landmarker.detectForVideo(vFront, ts);
-          const mat = res.facialTransformationMatrixes?.[0]?.data;
-          if (mat) {
-            // column-major 4×4: translation at [12],[13],[14]
-            // tx/tz and ty/tz are the camera-space angles — correct parallax
-            // signal for scene at infinity, phone rotation included for free.
-            const tx = mat[12], ty = mat[13], tz = mat[14];
-            const d = Math.abs(tz) || 1;
-            eyeX = eyeX * 0.7 + (tx / d) * 0.3;
-            eyeY = eyeY * 0.7 + (ty / d) * 0.3;
-            // track depth for frustum zoom: tz/tzRef scales the rear image
-            tzSmooth = tzSmooth === null ? d : tzSmooth * 0.9 + d * 0.1;
-            if (tzRef === null) tzRef = tzSmooth;
-          } else {
-            eyeX *= 0.9; eyeY *= 0.9;
-          }
-          trackTs = ts;
+        const res = landmarker.detectForVideo(vFront, now);
+        const mat = res.facialTransformationMatrixes?.[0]?.data;
+        if (mat) {
+          const tx = mat[12], ty = mat[13], tz = mat[14];
+          const d = Math.abs(tz) || 1;
+          eyeX = eyeX * 0.7 + (tx / d) * 0.3;
+          eyeY = eyeY * 0.7 + (ty / d) * 0.3;
+          tzSmooth = tzSmooth === null ? d : tzSmooth * 0.9 + d * 0.1;
+          if (tzRef === null) tzRef = tzSmooth;
+        } else {
+          eyeX *= 0.9; eyeY *= 0.9;
         }
       }
+      vFront.requestVideoFrameCallback(trackFrame);
+    }
 
-      // Render rear camera
+    // ── Render loop ───────────────────────────────────────────
+    function loop() {
       const W = canvas.width, H = canvas.height;
       if (rearReady && vRear.readyState >= 2 && vRear.videoWidth) {
         const vw = vRear.videoWidth, vh = vRear.videoHeight;
         const depthZoom = (tzRef && tzSmooth) ? tzSmooth / tzRef : 1;
-        const s  = Math.max(W / vw, H / vh) * zoom * depthZoom;
-        const shiftX = eyeX * gainX * W;
-        const shiftY = eyeY * gainY * H;
+        const s = Math.max(W / vw, H / vh) * zoom * depthZoom;
+        const shiftX = eyeX * gain * W;
+        const shiftY = eyeY * gain * H;
         ctx.drawImage(vRear,
           (W - vw * s) / 2 + panX + shiftX,
           (H - vh * s) / 2 + panY + shiftY,
@@ -254,18 +226,26 @@
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, W, H);
       }
-
       requestAnimationFrame(loop);
     }
+
+    // ── Parameter readout (update 2×/s) ──────────────────────
+    setInterval(() => {
+      if (!trackerAnnounced) return;
+      const W = canvas.width, H = canvas.height;
+      statusEl.textContent =
+        `gain ${gain.toFixed(1)}  zoom ${zoom.toFixed(3)}` +
+        `  pan ${(panX/W).toFixed(4)},${(panY/H).toFixed(4)}`;
+    }, 500);
 
     // ── Boot ──────────────────────────────────────────────────
     try {
       await openCamera(vRear, {
         facingMode: { exact: 'environment' },
-        width: { ideal: 1920 }, height: { ideal: 1080 },
+        width: { ideal: 1280 }, height: { ideal: 720 },  // 720p: faster drawImage
       });
       rearReady = true;
-      setStatus('Loading face tracker…');
+      statusEl.textContent = 'Loading face tracker…';
       requestAnimationFrame(loop);
 
       const [trackerResult, frontResult] = await Promise.allSettled([
@@ -278,15 +258,16 @@
 
       if (frontResult.status === 'fulfilled') {
         frontReady = true;
+        vFront.requestVideoFrameCallback(trackFrame); // start tracking loop
       } else {
-        setStatus('Front cam: ' + frontResult.reason.message);
+        statusEl.textContent = 'Front cam: ' + frontResult.reason.message;
       }
       if (trackerResult.status === 'rejected') {
-        setStatus('Tracker: ' + trackerResult.reason.message);
+        statusEl.textContent = 'Tracker: ' + trackerResult.reason.message;
       }
 
     } catch (e) {
-      setStatus('Error: ' + e.message);
+      statusEl.textContent = 'Error: ' + e.message;
     }
   </script>
 </body>
