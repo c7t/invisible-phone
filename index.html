@@ -113,6 +113,7 @@
         audio: false,
       });
       vRear.srcObject = stream;
+      vRear.play();
       await new Promise(r => { vRear.onloadeddata = r; });
       const s = vRear.srcObject.getVideoTracks()[0].getSettings();
       rearReady = true;
@@ -236,16 +237,24 @@
       }
 
       // Rear canvas — identity transform (pan=0, zoom=1, gain=0)
-      if (rearReady && vRear.readyState >= 2 && vRear.videoWidth) {
-        if (cvRear.width !== vRear.videoWidth) syncRearCanvas();
+      if (rearReady) {
+        if (cvRear.width !== vRear.videoWidth && vRear.videoWidth) syncRearCanvas();
         const W = cvRear.width, H = cvRear.height;
         const vw = vRear.videoWidth, vh = vRear.videoHeight;
-        const s = Math.max(W / vw, H / vh); // cover scale, zoom=1
-        rCtx.drawImage(vRear,
-          (W - vw * s) / 2,  // panX=0, shiftX=0
-          (H - vh * s) / 2,  // panY=0, shiftY=0
-          vw * s, vh * s
-        );
+
+        // Live diagnostics (update ~1/s)
+        if (Math.floor(ts / 1000) !== Math.floor((ts - 16) / 1000)) {
+          const diagIdx = lines.findIndex(l => l.msg.startsWith('rear:'));
+          const diagMsg = `rear: readyState=${vRear.readyState} videoW=${vw} paused=${vRear.paused} cv=${W}x${H}`;
+          if (diagIdx >= 0) lines[diagIdx] = { msg: diagMsg, cls: 'info' };
+          else lines.push({ msg: diagMsg, cls: 'info' });
+          statusEl.innerHTML = lines.map(l => `<div class="line ${l.cls}">${l.msg}</div>`).join('');
+        }
+
+        if (vRear.readyState >= 2 && vw) {
+          const s = Math.max(W / vw, H / vh);
+          rCtx.drawImage(vRear, (W - vw * s) / 2, (H - vh * s) / 2, vw * s, vh * s);
+        }
       }
 
       requestAnimationFrame(loop);
