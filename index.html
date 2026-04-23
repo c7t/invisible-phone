@@ -143,7 +143,7 @@
     gainEl.addEventListener('input', () => {
       const v = parseFloat(gainEl.value);
       panX -= eyeX * (v - gain) * canvas.width;
-      panY -= eyeY * (v - gain) * canvas.height;
+      panY -= eyeY * (v - gain) * canvas.width; // match render: both anchored to W
       gain = v;
       gainValEl.textContent = v.toFixed(1);
     });
@@ -236,7 +236,7 @@
         const depthZoom = (tzRef && tzSmooth) ? tzSmooth / tzRef : 1;
         const s = Math.max(W / vw, H / vh) * zoom * depthZoom;
         const imgX = (W - vw * s) / 2 + panX + eyeX * gain * W;
-        const imgY = (H - vh * s) / 2 + panY + eyeY * gain * H;
+        const imgY = (H - vh * s) / 2 + panY + eyeY * gain * W; // W for both: screen pixels are square
 
         // Upload current video frame as texture (GPU path, no CPU readback)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, vRear);
